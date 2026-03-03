@@ -1,19 +1,28 @@
 'use client'
-
 import { supabase } from '../lib/supabase.js'
+import { useEffect, useState } from 'react'
 
 interface UpgradeButtonProps {
-  priceId: string  // Stripe Price ID for Starter or Core
-  tierName: string // 'Starter' or 'Core'
+  priceId: string
+  tierName: string
 }
 
 export default function UpgradeButton({ priceId, tierName }: UpgradeButtonProps) {
+  const [user, setUser] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchUser() {
+      const { data: { user } } = await supabase.auth.getUser()
+      setUser(user)
+      setLoading(false)
+    }
+    fetchUser()
+  }, [])
+
   const handleUpgrade = async () => {
-    // 1️⃣ Get current logged-in user
-    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return alert('You must be logged in to upgrade.')
 
-    // 2️⃣ Call your Stripe API to create checkout session
     const response = await fetch('/api/create-checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -28,13 +37,12 @@ export default function UpgradeButton({ priceId, tierName }: UpgradeButtonProps)
     const { sessionUrl } = await response.json()
     if (!sessionUrl) return alert('Failed to create checkout session.')
 
-    // 3️⃣ Redirect user to Stripe checkout
     window.location.href = sessionUrl
   }
 
   return (
-    <button onClick={handleUpgrade}>
-      Upgrade to {starter, core}
+    <button onClick={handleUpgrade} disabled={loading}>
+      {loading ? 'Loading...' : `Upgrade to ${tierName}`}
     </button>
   )
 }
