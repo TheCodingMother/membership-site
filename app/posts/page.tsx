@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '../lib/supabase.js'
+import { supabase } from '../lib/supabase'
 import UpgradeButton from '../components/UpgradeButton'
 
+// Types
 interface Post {
   id: string
   title: string
@@ -12,108 +13,117 @@ interface Post {
   required_tier: string
 }
 
+interface Profile {
+  id: string
+  tier: string
+}
+
 export default function PostsPage() {
   const router = useRouter()
   const [posts, setPosts] = useState<Post[]>([])
   const [message, setMessage] = useState('Loading...')
-  const [userTier, setUserTier] = useState<string | null>(null)
+  const [userTier, setUserTier] = useState<string>('none')
+  const [loading, setLoading] = useState<boolean>(true)
 
-  useEffect(() => {
-    async function fetchPosts() {
-      try {
-        // 1️⃣ Get current logged-in user
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          router.push('/auth')
-          return
-        }
-
-        // 2️⃣ Get user's tier from profiles
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('tier')
-          .eq('user_id', user.id)
-          .single()
-
-        if (profileError || !profile) {
-          setMessage('Profile not found.')
-          return
-        }
-
-        const tier = profile.tier
-        setUserTier(tier)
-
-        // 3️⃣ Show upgrade buttons if tier is 'none'
-        if (!tier || tier === 'none') {
-          setMessage('You must upgrade to access posts.')
-          return
-        }
-
-        // 4️⃣ Fetch posts allowed for user's tier
-        const allowedTiers =
-          tier === 'Core' ? ['Starter', 'Core'] : ['Starter']
-
-        const { data: postsData, error } = await supabase
-          .from('posts')
-          .select('*')
-          .in('required_tier', allowedTiers)
-
-        if (error) {
-          console.error(error)
-          setMessage('Error loading posts.')
-        } else {
-          setPosts(postsData || [])
-          setMessage('') // clear message if posts exist
-        }
-      } catch (err) {
-        console.error(err)
-        setMessage('Unexpected error occurred.')
+  // Function to fetch user profile and posts
+  async function loadData() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.push('/auth')
+        return
       }
-    }
 
-    fetchPosts()
-  }, [router])
+      // Fetch profile by user id
+      let { data: profile } = await supabase
+        .from<Profile>('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle()
 
-  // 5️⃣ Logout function
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut({ global: true })
-    if (error) {
-      console.error('Logout error:', error)
-    } else {
-      router.push('/auth')
+      // Auto-create if missing
+      if (!profile) {
+        const { data: newProfile } = await supabase
+          .from<Profile>('profiles')
+          .insert({ id: user.id, tier: 'none' })
+          .select()
+          .maybeSingle()
+        profile = newProfile
+      }
+
+      const tier = profile?.tier || 'none'
+      setUserTier(tier)
+
+      // Block unpaid users
+      if (tier === 'none') {
+        setMessage('You must upgrade to access posts.')
+        setPosts([])
+        setLoading(false)
+        return
+      }
+
+      // Determine allowed tiers
+      const allowedTiers = tier === 'Core' ? ['Starter', 'Core'] : ['Starter']
+
+      const { data: postsData, error } = await supabase
+        .from<Post>('posts')
+        .select('*')
+        .in('required_tier', allowedTiers)
+
+      if (error) {
+        console.error(error)
+        setMessage('Error loading posts.')
+      } else {
+        setPosts(postsData || [])
+        setMessage(postsData?.length ? '' : 'No posts available for your tier.')
+      }
+
+    } catch (err) {
+      console.error(err)
+      setMessage('Unexpected error occurred.')
+    } finally {
+      setLoading(false)
     }
   }
 
+  // Auto-refresh tier after Stripe checkout
+  useEffect(() => {
+    loadData()
+
+    // Poll Supabase every 5 seconds for tier updates
+    const interval = setInterval(loadData, 5000)
+    return () => clearInterval(interval)
+  }, [router])
+
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut({ global: true })
+    if (error) console.error('Logout error:', error)
+    else router.push('/auth')
+  }
+
+  if (loading) return <p style={{ padding: '2rem' }}>Loading...</p>
+
   return (
     <div style={{ padding: '2rem' }}>
-      {/* Logout button */}
       <button onClick={handleLogout} style={{ marginBottom: '1rem' }}>
         Logout
       </button>
 
-      {/* Show upgrade buttons only if tier is 'none' */}
       {userTier === 'none' && (
         <div style={{ marginBottom: '2rem' }}>
           <p>You must upgrade to access posts:</p>
-          <UpgradeButton priceId="prod_U4tLhXwdqUPPFT" tierName="Starter" />
-          <UpgradeButton priceId="prod_U4tLWuGSWiX3rf" tierName="Core" />
+          <UpgradeButton priceId={process.env.STRIPE_STARTER_PRICE_ID!} tierName="Starter" />
+          <UpgradeButton priceId={process.env.STRIPE_CORE_PRICE_ID!} tierName="Core" />
         </div>
       )}
 
       <h1>Your Content</h1>
-
-      {/* Show message if no posts or blocked */}
       {message && <p>{message}</p>}
 
-      {/* Render posts */}
       {posts.map((post) => (
         <div
           key={post.id}
-          style={{
-            margin: '1rem 0',
-            border: '1px solid #ccc',
-            padding: '1rem'
-          }}
+          style={{ margin: '1rem 0', border: '1px solid #ccc', padding: '1rem' }}
         >
           <h2>{post.title}</h2>
           <p>{post.content}</p>

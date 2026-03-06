@@ -1,5 +1,6 @@
 'use client'
-import { supabase } from '../lib/supabase.js'
+
+import { supabase } from '../lib/supabase'
 import { useEffect, useState } from 'react'
 
 interface UpgradeButtonProps {
@@ -7,41 +8,60 @@ interface UpgradeButtonProps {
   tierName: string
 }
 
-export default function UpgradeButton({ priceId, tierName }: UpgradeButtonProps) {
-  const [user, setUser] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
+interface SupabaseUser {
+  id: string
+  email: string | null
+}
 
+export default function UpgradeButton({ priceId, tierName }: UpgradeButtonProps) {
+  const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
+
+  // Fetch the logged-in user
   useEffect(() => {
     async function fetchUser() {
       const { data: { user } } = await supabase.auth.getUser()
-      setUser(user)
+      if (user) {
+        setUser({ id: user.id, email: user.email })
+      }
       setLoading(false)
     }
     fetchUser()
   }, [])
 
+  // Handle upgrade button click
   const handleUpgrade = async () => {
-    if (!user) return alert('You must be logged in to upgrade.')
+    if (!user || !user.email) {
+      return alert('You must be logged in to upgrade.')
+    }
 
-    const response = await fetch('/api/create-checkout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        priceId,
-        email: user.email,
-        userId: user.id,
-        tierName
+    try {
+      const response = await fetch('/api/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priceId,
+          email: user.email,
+          userId: user.id,
+          tierName
+        })
       })
-    })
 
-    const { sessionUrl } = await response.json()
-    if (!sessionUrl) return alert('Failed to create checkout session.')
+      const data = await response.json()
+      if (!data.sessionUrl) {
+        return alert('Failed to create checkout session.')
+      }
 
-    window.location.href = sessionUrl
+      // Redirect to Stripe checkout
+      window.location.href = data.sessionUrl
+    } catch (err) {
+      console.error('Checkout error:', err)
+      alert('An error occurred while creating checkout session.')
+    }
   }
 
   return (
-    <button onClick={handleUpgrade} disabled={loading}>
+    <button onClick={handleUpgrade} disabled={loading} style={{ marginRight: '1rem' }}>
       {loading ? 'Loading...' : `Upgrade to ${tierName}`}
     </button>
   )
